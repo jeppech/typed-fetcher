@@ -4,15 +4,18 @@ import { Ok, Err } from '@jeppech/results-ts';
 import type { BodyJson } from './util';
 import { is_browser, json_stringify } from './util';
 
+import type { EndpointOfMethod, Endpoint, EndpointSpec, ExtractMethods, ExtractResponse } from './types';
 import type { FetchResponse } from './response';
 import { FetchResponseOk, FetchResponseErr } from './response';
-import { EndpointResponse, EndpointSpec, ExtractResponse } from './types';
 
 export class TypedFetcher<TSpec extends EndpointSpec> {
   constructor(public host: string) {}
 
-  fetch<P extends keyof TSpec, M extends keyof TSpec[P]>(path: P, method: M): Fetcher<ExtractResponse<TSpec, P, M>> {
-    return new Fetcher(this.url(path), { method: method as string });
+  fetch<
+    M extends ExtractMethods<TSpec>,
+    T extends EndpointOfMethod<TSpec, M>>(method: M, path: T['path']): Fetcher<ExtractResponse<TSpec, T['path'], M>
+    > {
+    return new Fetcher(this.url(path), { method });
   }
 
   url<P extends keyof TSpec>(path?: P): string {
@@ -29,7 +32,7 @@ export class TypedFetcher<TSpec extends EndpointSpec> {
 // 	return new Fetcher(url, { method })
 // }
 
-export class Fetcher<R extends EndpointResponse> {
+export class Fetcher<R extends Endpoint> {
   fetch: typeof fetch;
 
   constructor(public url: RequestInfo | URL, public options: RequestInit & { fetch?: typeof fetch } = {}) {
@@ -122,7 +125,7 @@ export class Fetcher<R extends EndpointResponse> {
     return this;
   }
 
-  async request(method?: string): Promise<Result<FetchResponse<R['ok'], R['err']>, FetchError>> {
+  async request(method?: string): Promise<Result<FetchResponse<R['response']['ok'], R['response']['err']>, FetchError>> {
     if (method !== undefined) {
       this.options.method = method;
     }
@@ -130,10 +133,10 @@ export class Fetcher<R extends EndpointResponse> {
     return this.exec();
   }
 
-  async exec(): Promise<Result<FetchResponse<R['ok'], R['err']>, FetchError>> {
+  async exec(): Promise<Result<FetchResponse<R['response']['ok'], R['response']['err']>, FetchError>> {
     return await this.fetch(this.url, this.options)
       .then((r) => {
-        return Ok(r.ok ? new FetchResponseOk<R['ok']>(r) : new FetchResponseErr<R['err']>(r));
+        return Ok(r.ok ? new FetchResponseOk<R['response']['ok']>(r) : new FetchResponseErr<R['response']['err']>(r));
       })
       .catch((e: Error | string) => Err(new FetchError(e)));
   }
