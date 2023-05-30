@@ -1,4 +1,4 @@
-import type { Result } from '@jeppech/results-ts';
+import { Err, Result } from '@jeppech/results-ts';
 import { Ok } from '@jeppech/results-ts';
 
 import { format_exception } from './util';
@@ -29,18 +29,18 @@ abstract class BaseFetchResponse<T> {
     return this.response.status;
   }
 
-  async json(): Promise<Result<T, string>> {
+  async json(): Promise<Result<T, JsonParseError>> {
     return await this.response
       .json()
       .then((v: T) => Ok(v))
-      .catch((err) => format_exception('fetcher json parse error', err));
+      .catch((err) => Err(new JsonParseError(err)));
   }
 
-  async text(): Promise<Result<string, string>> {
+  async text(): Promise<Result<string, TextParseError>> {
     return await this.response
       .text()
       .then((v) => Ok(v))
-      .catch((err) => format_exception('fetcher text parse error', err));
+      .catch((err) => Err(new TextParseError(err)));
   }
 }
 
@@ -57,3 +57,6 @@ export class FetchResponseErr<E> extends BaseFetchResponse<E> {
     super(response);
   }
 }
+
+class JsonParseError extends Error {}
+class TextParseError extends Error {}

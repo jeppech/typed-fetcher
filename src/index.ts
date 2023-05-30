@@ -1,3 +1,3 @@
 export { TypedFetcher, Fetcher } from './fetcher';
-export { FetchResponse } from './response';
-export { EndpointSpec, EndpointResponse } from './types';
+export type { FetchResponse } from './response';
+export type { EndpointSpec, Endpoint, EndpointResponse } from './types';
