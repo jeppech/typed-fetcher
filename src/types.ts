@@ -27,23 +27,29 @@ export type EndpointMethodSpec = {
   [Key in EndpointMethods]?: Endpoint;
 };
 
-export type EndpointOfMethod<TSpec extends EndpointSpec, TMethod extends EndpointMethods> = {
-  [P in keyof TSpec]: TSpec[P][TMethod] extends infer R extends Endpoint
-  ? { path: P; response: R }
+// export type EndpointOfMethod<TSpec extends EndpointSpec, TMethod extends EndpointMethods> = {
+//   [P in keyof TSpec]: TSpec[P][TMethod] extends infer R extends Endpoint
+//   ? { path: P; response: R, method: TMethod }
+//   : never
+// }[keyof TSpec]  
+
+export type EndpointsForPath<TSpec extends EndpointSpec, TPath extends keyof TSpec> = {
+  [M in keyof TSpec[TPath]]: TSpec[TPath][M] extends infer R extends Endpoint
+  ? { response: R, method: M }
   : never
-}[keyof TSpec]
+}[keyof TSpec[TPath]]
 
 export type ExtractResponse<
   TSpec extends EndpointSpec,
   TPath extends keyof TSpec,
-  TMethod extends EndpointMethods,
-> = Extract<EndpointOfMethod<TSpec, TMethod>, { path: TPath }>['response'];
+  TMethod extends keyof TSpec[TPath],
+> = Extract<EndpointsForPath<TSpec, TPath>, { method: TMethod }>['response'];
 
-export type ExtractMethods<TSpec extends EndpointSpec> = {
-  [P in keyof TSpec]: keyof TSpec[P] extends infer M extends EndpointMethods
-  ? keyof TSpec[P]
-  : never
-}[keyof TSpec]
+// export type ExtractMethods<TSpec extends EndpointSpec> = {
+//   [P in keyof TSpec]: keyof TSpec[P] extends infer M extends EndpointMethods
+//   ? M
+//   : never
+// }[keyof TSpec]
 
 // export type ExtractMethod<TSpec extends EndpointSpec> = {
 //  [P in keyof TSpec]: keyof TSpec[P] extends infer M extends EndpointMethods ? M : never

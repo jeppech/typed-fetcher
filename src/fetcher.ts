@@ -4,18 +4,15 @@ import { Ok, Err } from '@jeppech/results-ts';
 import type { BodyJson } from './util';
 import { is_browser, json_stringify } from './util';
 
-import type { EndpointOfMethod, Endpoint, EndpointSpec, ExtractMethods, ExtractResponse } from './types';
 import type { FetchResponse } from './response';
 import { FetchResponseOk, FetchResponseErr } from './response';
+import type { Endpoint, EndpointSpec, ExtractResponse } from './types';
 
 export class TypedFetcher<TSpec extends EndpointSpec> {
   constructor(public host: string) {}
 
-  fetch<
-    M extends ExtractMethods<TSpec>,
-    T extends EndpointOfMethod<TSpec, M>>(method: M, path: T['path']): Fetcher<ExtractResponse<TSpec, T['path'], M>
-    > {
-    return new Fetcher(this.url(path), { method });
+  fetch<TPath extends keyof TSpec, TMethod extends keyof TSpec[TPath]>(path: TPath, method: TMethod): Fetcher<ExtractResponse<TSpec, TPath, TMethod>> {
+    return new Fetcher(this.url(path), { method: method as string });
   }
 
   url<P extends keyof TSpec>(path?: P): string {
