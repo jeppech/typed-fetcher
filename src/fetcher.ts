@@ -8,7 +8,7 @@ import type { FetchResponse } from './response';
 import { FetchResponseOk, FetchResponseErr } from './response';
 import type { Endpoint, EndpointSpec, ExtractResponse } from './types';
 
-export class TypedFetcher<TSpec extends EndpointSpec> {
+export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
   constructor(public host?: string) {}
 
   fetch<TPath extends keyof TSpec, TMethod extends keyof TSpec[TPath]>(path: TPath, method: TMethod): Fetcher<ExtractResponse<TSpec, TPath, TMethod>> {
