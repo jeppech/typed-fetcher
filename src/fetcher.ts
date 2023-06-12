@@ -9,14 +9,18 @@ import { FetchResponseOk, FetchResponseErr } from './response';
 import type { Endpoint, EndpointSpec, ExtractResponse } from './types';
 
 export class TypedFetcher<TSpec extends EndpointSpec> {
-  constructor(public host: string) {}
+  constructor(public host?: string) {}
 
   fetch<TPath extends keyof TSpec, TMethod extends keyof TSpec[TPath]>(path: TPath, method: TMethod): Fetcher<ExtractResponse<TSpec, TPath, TMethod>> {
     return new Fetcher(this.url(path), { method: method as string });
   }
 
   url<P extends keyof TSpec>(path?: P): string {
-    if (path == undefined) {
+    if (this.host == undefined && path !== undefined) {
+      return path as string
+    }
+
+    if (path == undefined && this.host !== undefined) {
       return this.host;
     }
 
