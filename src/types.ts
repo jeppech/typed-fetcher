@@ -30,7 +30,7 @@ export type EndpointMethodSpec = {
 export type EndpointsForPath<TSpec extends EndpointSpec, TPath extends keyof TSpec> = {
   [M in keyof TSpec[TPath]]: TSpec[TPath][M] extends infer R extends Endpoint
   ? { response: R, method: M }
-  : never
+  : any
 }[keyof TSpec[TPath]]
 
 export type ExtractResponse<
