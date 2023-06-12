@@ -1,6 +1,6 @@
 {
   "name": "@jeppech/typed-fetcher",
-  "version": "1.0.0-beta.3",
+  "version": "1.0.0-beta.4",
   "description": "A fetch class, that can type HTTP responses",
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
