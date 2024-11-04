@@ -1,57 +1,114 @@
-import type { Result } from '@jeppech/results-ts';
 import { Ok, Err } from '@jeppech/results-ts';
+import { type Jsonable, json_stringify, base64_encode } from '@jeppech/results-ts/utils';
 
-import type { BodyJson } from './util';
-import { is_browser, json_stringify } from './util';
+import type { Endpoint, EndpointSpec, ExtractResponse } from './types.js';
+import type { HttpResponseErr, HttpResult } from './response.js';
+import { http_response } from './response.js';
+import { Semaphore, type Releaser } from './semaphore.js';
+// import { create } from '$pkg/logger/index.js';
 
-import type { FetchResponse } from './response';
-import { FetchResponseOk, FetchResponseErr } from './response';
-import type { Endpoint, EndpointSpec, ExtractResponse } from './types';
+type FetcherOpts = {
+  url: string;
+  path?: string;
+  semaphore?: number;
+};
+
+// export const logf = create('fetcher');
+
+export type RequestError =
+  | { type: 'http'; url: URL; err: HttpResponseErr<unknown> }
+  | { type: 'fetch'; url: URL; err: Error };
+
+export type PatchedRequest = {
+  base_url?: string;
+  route?: string;
+  bearer?: string;
+  retry: boolean;
+};
+
+export type InterceptHandler = (url: URL, req: Fetcher<Endpoint>) => Promise<void> | void;
+export type ErrorHandler = (err: RequestError, release?: Releaser) => Promise<PatchedRequest | null>;
+
+export type Unsubscriber = () => void;
 
 export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
-  constructor(public host?: string) {}
+  error_handlers: [ErrorHandler, boolean][] = [];
+  intercept_handlers: InterceptHandler[] = [];
+  public semaphore: Semaphore;
 
-  fetch<TPath extends keyof TSpec, TMethod extends keyof TSpec[TPath]>(path: TPath, method: TMethod): Fetcher<ExtractResponse<TSpec, TPath, TMethod>> {
-    return new Fetcher(this.url(path), { method: method as string });
+  constructor(private options: FetcherOpts) {
+    const url = new URL(options.url);
+
+    this.semaphore = new Semaphore(options.semaphore || 0);
+
+    if (url.pathname.match(/\/{2}/)) {
+      console.warn(`URL path contains double slashes: ${options.url} `);
+    }
   }
 
-  url<P extends keyof TSpec>(path?: P): string {
-    if (this.host == undefined && path !== undefined) {
-      return path as string
+  set url(url: string) {
+    if (new URL(url).pathname.match(/\/{2}/)) {
+      console.warn(`URL path contains double slashes: ${url} `);
     }
+    this.options.url = url;
+  }
 
-    if (path == undefined && this.host !== undefined) {
-      return this.host;
-    }
+  route<TPath extends keyof TSpec, TMethod extends keyof TSpec[TPath]>(
+    path: TPath,
+    method: TMethod,
+  ): Fetcher<ExtractResponse<TSpec, TPath, TMethod>> {
+    return new Fetcher(this.options.url, path as string, { method: method as string }, this);
+  }
 
-    return `${this.host}/${path as string}`;
+  intercept(handler: InterceptHandler): Unsubscriber {
+    this.intercept_handlers.push(handler);
+
+    return () => {
+      const idx = this.intercept_handlers.findIndex((h) => h == handler);
+      this.intercept_handlers.splice(idx, 1);
+    };
+  }
+
+  on_error(handler: ErrorHandler, blocking = false): Unsubscriber {
+    this.error_handlers.push([handler, blocking]);
+
+    return () => {
+      const idx = this.error_handlers.findIndex((h) => h[0] == handler);
+      this.error_handlers.splice(idx, 1);
+    };
   }
 }
 
-// url: RequestInfo | URL, options: RequestInit & { fetch?: typeof fetch } = {}): Fetcher<R> {
-// export function fetcher<P extends EndpointMethods, R extends EndpointResponse>(url: P, method: string = 'get'): Fetcher<R> {
-// 	return new Fetcher(url, { method })
-// }
+type RequestInitExtended = RequestInit & {
+  fetch?: typeof fetch;
+};
 
 export class Fetcher<R extends Endpoint> {
   fetch: typeof fetch;
 
-  constructor(public url: RequestInfo | URL, public options: RequestInit & { fetch?: typeof fetch } = {}) {
+  public url: string;
+  public url_path: string;
+  public url_path_params?: Record<string, string | number>;
+  public url_search_params?: Record<string, string | number>;
+
+  public options: RequestInitExtended;
+  private tf: TypedFetcher;
+
+  constructor(url: string, path: string, options: RequestInitExtended, tf: TypedFetcher) {
+    this.url = url;
+    this.url_path = path;
+    this.options = options;
+
     // Use the fetch function passed in options, or default
-    this.fetch = this.options.fetch || window.fetch;
+    this.fetch = this.options.fetch || globalThis.fetch;
+    this.tf = tf;
   }
 
   /**
    * Set header "Authorization: base64(<username>:<password>)"
    */
   basic(username: string, password: string): this {
-    let encoded: string;
-
-    if (is_browser()) {
-      encoded = window.btoa(`${username}:${password}`);
-    } else {
-      encoded = Buffer.from(`${username}:${password}`).toString('base64');
-    }
+    const encoded = base64_encode(`${username}:${password}`).expect('failed encoding credentials');
 
     return this.headers({
       Authorization: `Basic ${encoded}`,
@@ -86,14 +143,7 @@ export class Fetcher<R extends Endpoint> {
    * Add query string parameters to the URL.
    */
   params(params: Record<string, string | number>): this {
-    const url = new URL(this.url.toString());
-
-    for (const [key, value] of Object.entries(params)) {
-      url.searchParams.append(key, value.toString());
-    }
-
-    this.url = url;
-
+    this.url_search_params = params;
     return this;
   }
 
@@ -108,12 +158,21 @@ export class Fetcher<R extends Endpoint> {
   }
 
   /**
-   * Sets the request body.
-   * Throws if data cannot be parsed as JSON
+   * Search and replace method, for path parameters
    */
-  json(data?: BodyJson): this {
+  path(params: Record<string, string | number>): this {
+    this.url_path_params = params;
+    return this;
+  }
+
+  /**
+   * Marks the request as JSON, meaning the `Accept/Content-type`-headers will be set to `application/json`
+   *
+   * Throws if `data` cannot be parsed as JSON
+   */
+  json(data?: Jsonable): this {
     const headers: Record<string, string> = {
-      Accept: 'json',
+      Accept: 'application/json',
     };
 
     if (data !== undefined) {
@@ -121,12 +180,23 @@ export class Fetcher<R extends Endpoint> {
       headers['Content-Type'] = 'application/json';
     }
 
+    this.cache('no-store');
     this.headers(headers);
 
     return this;
   }
 
-  async request(method?: string): Promise<Result<FetchResponse<R['response']['ok'], R['response']['err']>, FetchError>> {
+  cache(value: RequestCache): this {
+    this.options.cache = value;
+    return this;
+  }
+
+  credentials(value: RequestCredentials): this {
+    this.options.credentials = value;
+    return this;
+  }
+
+  async request(method?: string): Promise<HttpResult<R, Error>> {
     if (method !== undefined) {
       this.options.method = method;
     }
@@ -134,17 +204,113 @@ export class Fetcher<R extends Endpoint> {
     return this.exec();
   }
 
-  async exec(): Promise<Result<FetchResponse<R['response']['ok'], R['response']['err']>, FetchError>> {
-    return await this.fetch(this.url, this.options)
-      .then((r) => {
-        return Ok(r.ok ? new FetchResponseOk<R['response']['ok']>(r) : new FetchResponseErr<R['response']['err']>(r));
-      })
-      .catch((e: Error | string) => Err(new FetchError(e)));
-  }
-}
+  private async handle_error(err: RequestError): Promise<PatchedRequest> {
+    if (this.tf.error_handlers.length == 0) {
+      return { retry: false };
+    }
 
-class FetchError extends Error {
-  constructor(err: Error | string) {
-    super(`fetch error: ${err instanceof Error ? err.message : err}`);
+    for (const [handler, blocking] of this.tf.error_handlers) {
+      let release: Releaser | undefined = undefined;
+      let patch: PatchedRequest | null = null;
+
+      if (blocking) {
+        release = await this.tf.semaphore.block();
+        patch = await handler(err, release);
+      } else {
+        patch = await handler(err);
+      }
+
+      if (!patch) continue;
+
+      return patch;
+    }
+
+    return { retry: false };
+  }
+
+  private apply_patch(patch: PatchedRequest): boolean {
+    if (patch.base_url) {
+      this.url = patch.base_url;
+    }
+
+    if (patch.route) {
+      this.url_path = patch.route;
+    }
+
+    if (patch.bearer) {
+      this.bearer(patch.bearer);
+    }
+
+    return patch.retry;
+  }
+
+  private intercept(url: URL): void {
+    for (const handler of this.tf.intercept_handlers) {
+      handler(url, this);
+    }
+  }
+
+  async exec(previous_lock?: Releaser): Promise<HttpResult<R, Error>> {
+    const url = this.build_url();
+
+    this.intercept(url);
+
+    const release = previous_lock || (await this.tf.semaphore.acquire());
+
+    const result: HttpResult<R, Error> = await this.fetch(url, this.options)
+      .then((r) => {
+        return Ok(http_response<R>(r));
+      })
+      .catch((e: Error | string) => {
+        return Err(typeof e == 'string' ? new Error(e) : e);
+      });
+
+    let patch: PatchedRequest;
+
+    if (result.is_ok()) {
+      const http_result = result.unwrap();
+      if (http_result.ok()) {
+        release();
+        return result;
+      }
+
+      patch = await this.handle_error({ type: 'http', url, err: http_result });
+
+      const retry = this.apply_patch(patch);
+
+      if (retry) {
+        return this.exec(release);
+      }
+    } else {
+      patch = await this.handle_error({ type: 'fetch', url, err: result.unwrap_err() });
+
+      const retry = this.apply_patch(patch);
+
+      if (retry) {
+        return this.exec(release);
+      }
+    }
+    release();
+    return result;
+  }
+
+  private build_url(): URL {
+    let path = this.url_path;
+
+    if (this.url_path_params) {
+      for (const [key, value] of Object.entries(this.url_path_params)) {
+        path = path.replace(`:${key}`, value.toString());
+      }
+    }
+
+    const url = new URL(this.url + path);
+
+    if (this.url_search_params) {
+      for (const [key, value] of Object.entries(this.url_search_params)) {
+        url.searchParams.append(key, value.toString());
+      }
+    }
+
+    return url;
   }
 }

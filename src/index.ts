@@ -1,3 +1,5 @@
-export { TypedFetcher, Fetcher } from './fetcher';
-export type { FetchResponse, FetchResponseOk, FetchResponseErr } from './response';
-export type { EndpointSpec, Endpoint, EndpointResponse } from './types';
+export type { HttpResponse, HttpResponseOk, HttpResponseErr } from './response.js';
+export type { EndpointSpec, Endpoint, EndpointResponse } from './types.js';
+
+export { TypedFetcher, Fetcher } from './fetcher.js';
+export type { PatchedRequest, RequestError, Unsubscriber, ErrorHandler } from './fetcher.js';
