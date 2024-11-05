@@ -205,7 +205,7 @@ export class Fetcher<R extends Endpoint> {
     return this.exec();
   }
 
-  private async handle_error(err: RequestError): Promise<PatchedRequest> {
+  private async handle_error(err: RequestError, skip = false): Promise<PatchedRequest> {
     if (this.tf.error_handlers.length == 0) {
       return { retry: false };
     }
@@ -215,7 +215,7 @@ export class Fetcher<R extends Endpoint> {
       let patch: PatchedRequest | null = null;
 
       if (blocking) {
-        release = await this.tf.semaphore.block();
+        release = await this.tf.semaphore.block(err.url.toString());
         patch = await handler(err, release);
       } else {
         patch = await handler(err);
@@ -255,12 +255,12 @@ export class Fetcher<R extends Endpoint> {
     }
   }
 
-  async exec(previous_lock?: Releaser): Promise<HttpResult<R, Error>> {
+  private async exec_with_lock(previous_lock?: Releaser): Promise<HttpResult<R, Error>> {
     const url = this.build_url();
 
     this.intercept(url);
 
-    const release = previous_lock || (await this.tf.semaphore.acquire());
+    const release = previous_lock || (await this.tf.semaphore.acquire(url.toString()));
 
     const result: HttpResult<R, Error> = await this.fetch(url, this.options)
       .then((r) => {
@@ -284,7 +284,7 @@ export class Fetcher<R extends Endpoint> {
       const retry = this.apply_patch(patch);
 
       if (retry) {
-        return this.exec(release);
+        return this.exec_with_lock(release);
       }
     } else {
       patch = await this.handle_error({ type: 'fetch', url, err: result.unwrap_err() });
@@ -292,11 +292,37 @@ export class Fetcher<R extends Endpoint> {
       const retry = this.apply_patch(patch);
 
       if (retry) {
-        return this.exec(release);
+        return this.exec_with_lock(release);
       }
     }
     release();
     return result;
+  }
+
+  /**
+   * Forcing the request to execute, ignoring any locks that might be blocking the queue.
+   * This is useful if you need to re-authenticate.
+   *
+   * This will not trigger any error handlers.
+   */
+  async force_exec(): Promise<HttpResult<R, Error>> {
+    const url = this.build_url();
+
+    this.intercept(url);
+
+    const result: HttpResult<R, Error> = await this.fetch(url, this.options)
+      .then((r) => {
+        return Ok(http_response<R>(r));
+      })
+      .catch((e: Error | string) => {
+        return Err(typeof e == 'string' ? new Error(e) : e);
+      });
+
+    return result;
+  }
+
+  async exec(): Promise<HttpResult<R, Error>> {
+    return this.exec_with_lock();
   }
 
   private build_url(): URL {
