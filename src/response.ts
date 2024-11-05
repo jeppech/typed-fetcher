@@ -88,10 +88,10 @@ export class HttpResponseErr<E> extends BaseHttpResponse<never, E> {
     }
   }
 
-  async text(): Promise<Result<E, string>> {
+  async text(): Promise<Result<string, string>> {
     try {
-      const json: E = await this.response.json();
-      return Ok(json);
+      const str = await this.response.text();
+      return Ok(str);
     } catch (error) {
       console.error('failed parsing json', error);
       return Err('failed parsing json');
