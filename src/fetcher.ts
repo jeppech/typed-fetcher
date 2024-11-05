@@ -23,6 +23,7 @@ export type PatchedRequest = {
   base_url?: string;
   route?: string;
   bearer?: string;
+  headers?: HeadersInit;
   retry: boolean;
 };
 
@@ -239,6 +240,10 @@ export class Fetcher<R extends Endpoint> {
 
     if (patch.bearer) {
       this.bearer(patch.bearer);
+    }
+
+    if (patch.headers) {
+      this.headers(patch.headers);
     }
 
     return patch.retry;
