@@ -205,7 +205,7 @@ export class Fetcher<R extends Endpoint> {
     return this.exec();
   }
 
-  private async handle_error(err: RequestError, skip = false): Promise<PatchedRequest> {
+  private async handle_error(err: RequestError): Promise<PatchedRequest> {
     if (this.tf.error_handlers.length == 0) {
       return { retry: false };
     }
@@ -215,7 +215,7 @@ export class Fetcher<R extends Endpoint> {
       let patch: PatchedRequest | null = null;
 
       if (blocking) {
-        release = await this.tf.semaphore.block(err.url.toString());
+        release = this.tf.semaphore.block(err.url.toString());
         patch = await handler(err, release);
       } else {
         patch = await handler(err);
