@@ -28,7 +28,10 @@ export type PatchedRequest = {
 };
 
 export type InterceptHandler = (url: URL, req: Fetcher<Endpoint>) => Promise<void> | void;
-export type ErrorHandler = (err: RequestError, release?: Releaser) => Promise<PatchedRequest | null>;
+export type ErrorHandler = (
+  err: RequestError,
+  release?: Releaser,
+) => Promise<[PatchedRequest | null, Releaser | undefined]>;
 
 export type Unsubscriber = () => void;
 
@@ -216,11 +219,12 @@ export class Fetcher<R extends Endpoint> {
 
       if (blocking) {
         release = this.tf.semaphore.block(err.url.toString());
-        patch = await handler(err, release);
+        [patch, release] = await handler(err, release);
       } else {
-        patch = await handler(err);
+        [patch, release] = await handler(err);
       }
 
+      if (release) release();
       if (!patch) continue;
 
       return patch;
