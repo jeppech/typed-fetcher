@@ -24,29 +24,29 @@ export class Semaphore {
     return new Promise((resolve) => {
       if (this.blocked) {
         this.waiting.push(resolve);
-        console.debug(`semaphore: blocked, waiting for release. ${id}`);
+        // console.debug(`semaphore: blocked, waiting for release. ${id}`);
         return;
       }
 
       if (this.waiting.length > 0) {
         this.waiting.push(resolve);
-        console.debug(`semaphore: waiting for permit. ${id}`);
+        // console.debug(`semaphore: waiting for permit. ${id}`);
         return;
       }
 
       if (this.free > 0) {
         this.free--;
-        console.debug(`semaphore: acquired lock. ${id}`);
+        // console.debug(`semaphore: acquired lock. ${id}`);
         resolve(() => {
           this.free++;
-          console.debug(`semaphore: released lock. ${id} [free=${this.free}]`);
+          // console.debug(`semaphore: released lock. ${id} [free=${this.free}]`);
           this.release(id);
         });
         return;
       }
 
       // We should never get here, but just in case. ¯\_(ツ)_/¯
-      console.debug('semaphore: no free locks, waiting for release');
+      // console.debug('semaphore: no free locks, waiting for release');
       this.waiting.push(resolve);
     });
   }
@@ -60,7 +60,7 @@ export class Semaphore {
       this.free--;
       resolve(() => {
         this.free++;
-        console.debug(`semaphore: released lock ${id} [free=${this.free}]`);
+        // console.debug(`semaphore: released lock ${id} [free=${this.free}]`);
         this.release();
       });
 
@@ -71,10 +71,10 @@ export class Semaphore {
   }
 
   public block(id?: string): Releaser {
-    console.debug(`semaphore: BLOCK. ${id}`);
+    // console.debug(`semaphore: BLOCK. ${id}`);
     this.blocked = true;
     return () => {
-      console.debug(`semaphore: UNBLOCK. ${id}`);
+      // console.debug(`semaphore: UNBLOCK. ${id}`);
       this.blocked = false;
       this.release();
     };

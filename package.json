@@ -1,6 +1,6 @@
 {
   "name": "@jeppech/typed-fetcher",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A fetch class, for typing HTTP endpoints",
   "author": "Jeppe Christiansen",
   "license": "ISC",
@@ -15,7 +15,8 @@
   "exports": {
     ".": {
       "import": "./lib/index.js",
-      "require": "./lib/index.js"
+      "require": "./lib/index.js",
+      "types": "./lib/index.d.ts"
     }
   },
   "files": [
