@@ -36,23 +36,3 @@ export type ExtractResponse<
   TPath extends keyof TSpec,
   TMethod extends keyof TSpec[TPath],
 > = Extract<EndpointsForPath<TSpec, TPath>, { method: TMethod }>['response'];
-
-// export type ExtractMethods<TSpec extends EndpointSpec> = {
-//   [P in keyof TSpec]: keyof TSpec[P] extends infer M extends EndpointMethods
-//   ? M
-//   : never
-// }[keyof TSpec]
-
-// export type EndpointOfMethod<TSpec extends EndpointSpec, TMethod extends EndpointMethods> = {
-//   [P in keyof TSpec]: TSpec[P][TMethod] extends infer R extends Endpoint
-//   ? { path: P; response: R, method: TMethod }
-//   : never
-// }[keyof TSpec]
-
-// export type ExtractMethod<TSpec extends EndpointSpec> = {
-//  [P in keyof TSpec]: keyof TSpec[P] extends infer M extends EndpointMethods ? M : never
-// }[keyof TSpec]
-
-// export type ExtractPaths<TSpec extends EndpointSpec, TMethod extends EndpointMethods> = {
-//  [P in keyof TSpec]: TMethod extends keyof TSpec[P] ? P & string : never
-// }[keyof TSpec]

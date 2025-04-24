@@ -1,4 +1,5 @@
-import { Ok, Err, type Result } from '@jeppech/results-ts';
+import { Err, Ok, type Result } from '@jeppech/results-ts';
+
 import type { Endpoint } from './types.js';
 
 // Extract the `ok` and `err` types from an endpoint response
@@ -60,7 +61,7 @@ export class HttpResponseOk<T> extends BaseHttpResponse<T, never> {
       return Ok(json);
     } catch (error) {
       console.error('failed parsing json', error);
-      return Err('failed parsing json');
+      return Err(`failed parsing json: ${error}`);
     }
   }
 
@@ -70,7 +71,7 @@ export class HttpResponseOk<T> extends BaseHttpResponse<T, never> {
       return Ok(text);
     } catch (error) {
       console.error('failed parsing text', error);
-      return Err('failed parsing text');
+      return Err(`failed parsing text: ${error}`);
     }
   }
 }
@@ -84,7 +85,7 @@ export class HttpResponseErr<E> extends BaseHttpResponse<never, E> {
       return Ok(json);
     } catch (error) {
       console.error('failed parsing json', error);
-      return Err('failed parsing json');
+      return Err(`failed parsing json: ${error}`);
     }
   }
 
@@ -93,8 +94,8 @@ export class HttpResponseErr<E> extends BaseHttpResponse<never, E> {
       const str = await this.response.text();
       return Ok(str);
     } catch (error) {
-      console.error('failed parsing json', error);
-      return Err('failed parsing json');
+      console.error('failed parsing text', error);
+      return Err(`failed parsing text: ${error}`);
     }
   }
 }

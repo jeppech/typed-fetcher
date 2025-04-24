@@ -1,19 +1,16 @@
-import { Ok, Err } from '@jeppech/results-ts';
-import { type Jsonable, json_stringify, base64_encode } from '@jeppech/results-ts/utils';
+import { Err, Ok } from '@jeppech/results-ts';
+import { base64_encode, json_stringify } from '@jeppech/results-ts/utils';
 
-import type { Endpoint, EndpointSpec, ExtractResponse } from './types.js';
 import type { HttpResponseErr, HttpResult } from './response.js';
 import { http_response } from './response.js';
 import { Semaphore, type Releaser } from './semaphore.js';
-// import { create } from '$pkg/logger/index.js';
+import type { Endpoint, EndpointSpec, ExtractResponse } from './types.js';
 
 type FetcherOpts = {
   url: string;
   path?: string;
   semaphore?: number;
 };
-
-// export const logf = create('fetcher');
 
 export type RequestError =
   | { type: 'http'; url: URL; err: HttpResponseErr<unknown> }
@@ -174,7 +171,7 @@ export class Fetcher<R extends Endpoint> {
    *
    * Throws if `data` cannot be parsed as JSON
    */
-  json(data?: Jsonable): this {
+  json(data?: unknown): this {
     const headers: Record<string, string> = {
       Accept: 'application/json',
     };
