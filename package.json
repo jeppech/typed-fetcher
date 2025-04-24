@@ -1,6 +1,6 @@
 {
   "name": "@jeppech/typed-fetcher",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "A fetch class, for typing HTTP endpoints",
   "author": "Jeppe Christiansen",
   "license": "ISC",
