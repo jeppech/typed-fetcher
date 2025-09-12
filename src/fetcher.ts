@@ -94,6 +94,7 @@ export class Fetcher<R extends Endpoint> {
 
   public options: RequestInitExtended;
   private tf: TypedFetcher;
+  private log_exec = false;
 
   constructor(url: string, path: string, options: RequestInitExtended, tf: TypedFetcher) {
     this.url = url;
@@ -194,6 +195,14 @@ export class Fetcher<R extends Endpoint> {
 
   credentials(value: RequestCredentials): this {
     this.options.credentials = value;
+    return this;
+  }
+
+  /**
+   * Logs the request and response to the console
+   */
+  log() {
+    this.log_exec = true;
     return this;
   }
 
@@ -323,6 +332,11 @@ export class Fetcher<R extends Endpoint> {
   }
 
   async exec(): Promise<HttpResult<R, Error>> {
+    if (this.log_exec) {
+      console.log(`${this.options.method} ${this.url}`);
+      console.log('Headers', JSON.stringify(this.headers, null, 2));
+      console.log('Body', JSON.stringify(this.body, null, 2));
+    }
     return this.exec_with_lock();
   }
 
