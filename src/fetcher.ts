@@ -266,14 +266,30 @@ export class Fetcher<R extends Endpoint> {
   }
 
   private async exec_with_lock(previous_lock?: Releaser): Promise<HttpResult<R, Error>> {
+    const do_log = this.log_exec;
+    this.log_exec = false;
+
     const url = this.build_url();
+
+    if (do_log) {
+      console.log('--- request');
+      console.log(`${this.options.method?.toUpperCase()} ${this.url}`);
+      console.log('Headers', JSON.stringify(this.options.headers, null, 2));
+      console.log('Body', JSON.stringify(this.options.body, null, 2));
+    }
 
     this.intercept(url);
 
     const release = previous_lock || (await this.tf.semaphore.acquire(url.toString()));
 
     const result: HttpResult<R, Error> = await this.fetch(url, this.options)
-      .then((r) => {
+      .then(async (r) => {
+        if (do_log) {
+          console.log('--- response');
+          for (const [key, value] of r.headers.entries()) {
+            console.log(`${key}: ${value}`);
+          }
+        }
         return Ok(http_response<R>(r));
       })
       .catch((e: Error | string) => {
@@ -332,11 +348,6 @@ export class Fetcher<R extends Endpoint> {
   }
 
   async exec(): Promise<HttpResult<R, Error>> {
-    if (this.log_exec) {
-      console.log(`${this.options.method} ${this.url}`);
-      console.log('Headers', JSON.stringify(this.headers, null, 2));
-      console.log('Body', JSON.stringify(this.body, null, 2));
-    }
     return this.exec_with_lock();
   }
 
