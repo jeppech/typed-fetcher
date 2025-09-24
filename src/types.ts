@@ -36,3 +36,33 @@ export type ExtractResponse<
   TPath extends keyof TSpec,
   TMethod extends keyof TSpec[TPath],
 > = Extract<EndpointsForPath<TSpec, TPath>, { method: TMethod }>['response'];
+
+export type Jsonable =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly Jsonable[]
+  | { readonly [key: string]: Jsonable }
+  | { toJSON(): Jsonable };
+
+export class BaseError<T extends string> extends Error {
+  name: T;
+  message: string;
+
+  readonly context?: Jsonable;
+
+  constructor(name: T, message: string, options: { cause?: unknown; context?: Jsonable } = {}) {
+    super();
+
+    this.name = name;
+    this.message = message;
+    this.context = options.context;
+    this.cause = options.cause;
+  }
+}
+
+type ParseTypes = 'JSON' | 'TEXT';
+
+export class ParseError extends BaseError<ParseTypes> {}
