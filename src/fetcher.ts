@@ -287,7 +287,7 @@ export class Fetcher<R extends Endpoint> {
 
     if (do_log) {
       console.log('--- request');
-      console.log(`${this.options.method?.toUpperCase()} ${this.url}`);
+      console.log(`${this.options.method?.toUpperCase()} ${url}`);
       console.log('Headers', JSON.stringify(this.options.headers, null, 2));
       console.log('Body', JSON.stringify(this.options.body, null, 2));
     }
