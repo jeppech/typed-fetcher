@@ -35,7 +35,9 @@ export type Unsubscriber = () => void;
 export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
   error_handlers: [ErrorHandler, boolean][] = [];
   intercept_handlers: InterceptHandler[] = [];
+
   public semaphore: Semaphore;
+  private log_exec: boolean = false;
 
   constructor(private options: FetcherOpts) {
     const url = new URL(options.url);
@@ -78,6 +80,13 @@ export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
       this.error_handlers.splice(idx, 1);
     };
   }
+
+  log(value?: boolean) {
+    if (value == undefined) {
+      return this.log_exec;
+    }
+    return (this.log_exec = value);
+  }
 }
 
 type RequestInitExtended = RequestInit & {
@@ -104,6 +113,7 @@ export class Fetcher<R extends Endpoint> {
     // Use the fetch function passed in options, or default
     this.fetch = this.options.fetch || globalThis.fetch;
     this.tf = tf;
+    this.log_exec = tf.log();
   }
 
   /**
@@ -201,8 +211,12 @@ export class Fetcher<R extends Endpoint> {
   /**
    * Logs the request and response to the console
    */
-  log() {
-    this.log_exec = true;
+  log(value?: boolean) {
+    if (value == undefined) {
+      this.log_exec = true;
+      return this;
+    }
+    this.log_exec = value;
     return this;
   }
 
@@ -220,17 +234,17 @@ export class Fetcher<R extends Endpoint> {
     }
 
     for (const [handler, blocking] of this.tf.error_handlers) {
-      let release: Releaser | undefined = undefined;
+      let releaser: Releaser | undefined = undefined;
       let patch: PatchedRequest | null = null;
 
       if (blocking) {
-        release = this.tf.semaphore.block(err.url.toString());
-        [patch, release] = await handler(err, release);
+        releaser = this.tf.semaphore.block(err.url.toString());
+        [patch, releaser] = await handler(err, releaser);
       } else {
-        [patch, release] = await handler(err);
+        [patch] = await handler(err);
       }
 
-      if (release) release();
+      releaser?.();
       if (!patch) continue;
 
       return patch;
