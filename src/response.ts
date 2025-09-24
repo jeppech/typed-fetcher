@@ -1,6 +1,6 @@
 import { Err, Ok, type Result } from '@jeppech/results-ts';
 
-import { type Endpoint, ParseError } from './types.js';
+import { type Endpoint, Jsonable } from './types.js';
 
 // Extract the `ok` and `err` types from an endpoint response
 export type HttpResult<R extends Endpoint, E> = Result<HttpResponse<R['response']['ok'], R['response']['err']>, E>;
@@ -99,3 +99,23 @@ export class HttpResponseErr<E> extends BaseHttpResponse<never, E> {
     }
   }
 }
+
+export class BaseError<T extends string> extends Error {
+  name: T;
+  message: string;
+
+  readonly context?: Jsonable;
+
+  constructor(name: T, message: string, options: { cause?: unknown; context?: Jsonable } = {}) {
+    super();
+
+    this.name = name;
+    this.message = message;
+    this.context = options.context;
+    this.cause = options.cause;
+  }
+}
+
+type ParseTypes = 'JSON' | 'TEXT';
+
+export class ParseError extends BaseError<ParseTypes> {}
