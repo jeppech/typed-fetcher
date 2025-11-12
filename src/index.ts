@@ -4,3 +4,4 @@ export type { Endpoint, EndpointResponse, EndpointSpec, Jsonable } from './types
 
 export { Fetcher, TypedFetcher } from './fetcher.js';
 export type { ErrorHandler, PatchedRequest, RequestError, Unsubscriber } from './fetcher.js';
+export * from './status.js';
