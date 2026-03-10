@@ -1,4 +1,4 @@
-export type EndpointMethods = 'get' | 'post' | 'put' | 'update' | 'patch' | 'delete' | 'head' | 'options';
+export type EndpointMethods = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options';
 
 export type EndpointResponse<TOkData = unknown, TErrData = unknown> = {
   ok: TOkData;

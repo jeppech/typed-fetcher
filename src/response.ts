@@ -1,6 +1,6 @@
 import { Err, Ok, type Result } from '@jeppech/results-ts';
 
-import { type Endpoint, Jsonable } from './types.js';
+import type { Endpoint, Jsonable } from './types.js';
 
 // Extract the `ok` and `err` types from an endpoint response
 export type HttpResult<R extends Endpoint, E> = Result<HttpResponse<R['response']['ok'], R['response']['err']>, E>;
@@ -49,7 +49,7 @@ abstract class BaseHttpResponse<T, E> {
   }
 
   abstract json(): Promise<Result<T, ParseError> | Result<E, ParseError>>;
-  abstract text(): Promise<Result<string, ParseError> | Result<E, ParseError>>;
+  abstract text(): Promise<Result<string, ParseError>>;
 }
 
 export class HttpResponseOk<T> extends BaseHttpResponse<T, never> {
@@ -89,13 +89,13 @@ export class HttpResponseErr<E> extends BaseHttpResponse<never, E> {
     }
   }
 
-  async text(): Promise<Result<E, ParseError>> {
+  async text(): Promise<Result<string, ParseError>> {
     try {
-      const json: E = await this.response.json();
-      return Ok(json);
+      const text: string = await this.response.text();
+      return Ok(text);
     } catch (error) {
       console.error('failed parsing text', error);
-      return Err(new ParseError('JSON', 'failed parsing json', { context: this.response.url, cause: error }));
+      return Err(new ParseError('TEXT', 'failed parsing text', { context: this.response.url, cause: error }));
     }
   }
 }

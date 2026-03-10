@@ -16,11 +16,11 @@ export type RequestError =
   | { type: 'http'; url: URL; err: HttpResponseErr<unknown> }
   | { type: 'fetch'; url: URL; err: Error };
 
-export type PatchedRequest = {
+export type RequestPatch = {
   base_url?: string;
   route?: string;
   bearer?: string;
-  headers?: HeadersInit;
+  headers?: Record<string, string>;
   retry: boolean;
 };
 
@@ -28,7 +28,7 @@ export type InterceptHandler = (url: URL, req: Fetcher<Endpoint>) => Promise<voi
 export type ErrorHandler = (
   err: RequestError,
   release?: Releaser,
-) => Promise<[PatchedRequest | null, Releaser | undefined]>;
+) => Promise<[RequestPatch | null, Releaser | undefined]>;
 
 export type Unsubscriber = () => void;
 
@@ -68,7 +68,9 @@ export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
 
     return () => {
       const idx = this.intercept_handlers.findIndex((h) => h == handler);
-      this.intercept_handlers.splice(idx, 1);
+      if (idx !== -1) {
+        this.intercept_handlers.splice(idx, 1);
+      }
     };
   }
 
@@ -77,7 +79,9 @@ export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
 
     return () => {
       const idx = this.error_handlers.findIndex((h) => h[0] == handler);
-      this.error_handlers.splice(idx, 1);
+      if (idx !== -1) {
+        this.error_handlers.splice(idx, 1);
+      }
     };
   }
 
@@ -138,11 +142,9 @@ export class Fetcher<R extends Endpoint> {
 
   /**
    * Set the request headers.
-   * Any matching headers set in options, will be overidden.
-   *
-   * @TODO This needs to handle both head
+   * Any matching headers set in options, will be overridden.
    */
-  headers(headers: HeadersInit): this {
+  headers(headers: Record<string, string>): this {
     this.options.headers = {
       ...this.options.headers,
       ...headers,
@@ -155,7 +157,10 @@ export class Fetcher<R extends Endpoint> {
    * Add query string parameters to the URL.
    */
   params(params: Record<string, string | number>): this {
-    this.url_search_params = params;
+    this.url_search_params = {
+      ...this.url_search_params,
+      ...params,
+    };
     return this;
   }
 
@@ -228,14 +233,14 @@ export class Fetcher<R extends Endpoint> {
     return this.exec();
   }
 
-  private async handle_error(err: RequestError): Promise<PatchedRequest> {
+  private async handle_error(err: RequestError): Promise<RequestPatch> {
     if (this.tf.error_handlers.length == 0) {
       return { retry: false };
     }
 
     for (const [handler, blocking] of this.tf.error_handlers) {
       let releaser: Releaser | undefined = undefined;
-      let patch: PatchedRequest | null = null;
+      let patch: RequestPatch | null = null;
 
       if (blocking) {
         releaser = this.tf.semaphore.block(err.url.toString());
@@ -253,7 +258,7 @@ export class Fetcher<R extends Endpoint> {
     return { retry: false };
   }
 
-  private apply_patch(patch: PatchedRequest): boolean {
+  private apply_patch(patch: RequestPatch): boolean {
     if (patch.base_url) {
       this.url = patch.base_url;
     }
@@ -273,9 +278,9 @@ export class Fetcher<R extends Endpoint> {
     return patch.retry;
   }
 
-  private intercept(url: URL): void {
+  private async intercept(url: URL): Promise<void> {
     for (const handler of this.tf.intercept_handlers) {
-      handler(url, this);
+      await handler(url, this);
     }
   }
 
@@ -292,7 +297,7 @@ export class Fetcher<R extends Endpoint> {
       console.log('Body', JSON.stringify(this.options.body, null, 2));
     }
 
-    this.intercept(url);
+    await this.intercept(url);
 
     const release = previous_lock || (await this.tf.semaphore.acquire(url.toString()));
 
@@ -310,7 +315,7 @@ export class Fetcher<R extends Endpoint> {
         return Err(typeof e == 'string' ? new Error(e) : e);
       });
 
-    let patch: PatchedRequest;
+    let patch: RequestPatch;
 
     if (result.is_ok()) {
       const http_result = result.unwrap();
@@ -348,7 +353,7 @@ export class Fetcher<R extends Endpoint> {
   async force_exec(): Promise<HttpResult<R, Error>> {
     const url = this.build_url();
 
-    this.intercept(url);
+    await this.intercept(url);
 
     const result: HttpResult<R, Error> = await this.fetch(url, this.options)
       .then((r) => {
