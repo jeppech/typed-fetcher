@@ -11,6 +11,9 @@ importers:
       '@jeppech/results-ts':
         specifier: ^1.3.1
         version: 1.3.1
+      '@jeppech/semaphore-ts':
+        specifier: ^1.0.0
+        version: 1.0.0
     devDependencies:
       '@eslint/eslintrc':
         specifier: ^3.3.1
@@ -99,6 +102,9 @@ packages:
 
   '@jeppech/results-ts@1.3.1':
     resolution: {integrity: sha512-gzQhXwH2N4W07A3hWwrR/6ro504r+IBPnm7glvV8sIGXGrt6tePBy8Uc9OL7vFhAI+1wqeQydmzvHuZovFyJiQ==}
+
+  '@jeppech/semaphore-ts@1.0.0':
+    resolution: {integrity: sha512-Ak5sNYa4ghe/mlrndurub0zd7xl16iDALWFYbnB9al4C5gKMbLSDYsSEibjISNEG2QUVNd4Bgo3xC1u85QrsPQ==}
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -584,6 +590,8 @@ snapshots:
   '@humanwhocodes/retry@0.4.2': {}
 
   '@jeppech/results-ts@1.3.1': {}
+
+  '@jeppech/semaphore-ts@1.0.0': {}
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:

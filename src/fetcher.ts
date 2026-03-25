@@ -1,9 +1,9 @@
 import { Err, Ok } from '@jeppech/results-ts';
 import { base64_encode, json_stringify } from '@jeppech/results-ts/utils';
+import { Semaphore, type Releaser } from '@jeppech/semaphore-ts';
 
 import type { HttpResponseErr, HttpResult } from './response.js';
 import { http_response } from './response.js';
-import { Semaphore, type Releaser } from './semaphore.js';
 import type { Endpoint, EndpointSpec, ExtractResponse } from './types.js';
 
 type FetcherOpts = {
