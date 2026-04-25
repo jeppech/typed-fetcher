@@ -20,12 +20,26 @@ export type RequestError =
   | { type: 'http'; url: URL; err: HttpResponseErr<unknown> }
   | { type: 'fetch'; url: URL; err: FetchError };
 
-export type RequestPatch = {
+export type RetryPatch = {
   base_url?: string;
   route?: string;
   bearer?: string;
   headers?: Record<string, string>;
-  retry: boolean;
+};
+
+export type RequestContext<R extends Endpoint = Endpoint> = {
+  url: URL;
+  req: Fetcher<R>;
+  attempt: number;
+};
+
+export type RetryDecision =
+  | { action: 'skip' }
+  | { action: 'fail' }
+  | { action: 'retry'; patch?: RetryPatch; delay_ms?: number };
+
+export type RetryOptions = {
+  blocking?: boolean;
 };
 
 export type HttpJsonError<R extends Endpoint> =
@@ -43,10 +57,14 @@ export type MiddlewareHandler<R extends Endpoint = Endpoint> = (options: {
   req: Fetcher<R>;
   next: NextHandler<R>;
 }) => Promise<HttpResult<R>>;
-export type ErrorHandler = (
+export type ErrorObserver<R extends Endpoint = Endpoint> = (
   err: RequestError,
-  release?: Releaser,
-) => Promise<[RequestPatch | null, Releaser | undefined]>;
+  ctx: RequestContext<R>,
+) => Promise<void> | void;
+export type RetryHandler<R extends Endpoint = Endpoint> = (
+  err: RequestError,
+  ctx: RequestContext<R>,
+) => Promise<RetryDecision> | RetryDecision;
 
 export type Unsubscriber = () => void;
 
@@ -55,7 +73,8 @@ type RequestInitExtended = RequestInit & {
 };
 
 export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
-  error_handlers: [ErrorHandler, boolean][] = [];
+  error_observers: ErrorObserver[] = [];
+  retry_handlers: [RetryHandler, RetryOptions][] = [];
   middleware_handlers: MiddlewareHandler[] = [];
 
   public semaphore: Semaphore;
@@ -96,13 +115,24 @@ export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
     };
   }
 
-  on_error(handler: ErrorHandler, blocking = false): Unsubscriber {
-    this.error_handlers.push([handler, blocking]);
+  on_error(handler: ErrorObserver): Unsubscriber {
+    this.error_observers.push(handler);
 
     return () => {
-      const idx = this.error_handlers.findIndex((h) => h[0] == handler);
+      const idx = this.error_observers.findIndex((h) => h == handler);
       if (idx !== -1) {
-        this.error_handlers.splice(idx, 1);
+        this.error_observers.splice(idx, 1);
+      }
+    };
+  }
+
+  retry(handler: RetryHandler, options: RetryOptions = {}): Unsubscriber {
+    this.retry_handlers.push([handler, options]);
+
+    return () => {
+      const idx = this.retry_handlers.findIndex((h) => h[0] == handler);
+      if (idx !== -1) {
+        this.retry_handlers.splice(idx, 1);
       }
     };
   }
@@ -305,32 +335,34 @@ export class Fetcher<R extends Endpoint> {
     };
   }
 
-  private async handle_error(err: RequestError): Promise<RequestPatch> {
-    if (this.tf.error_handlers.length == 0) {
-      return { retry: false };
+  private async notify_error(err: RequestError, ctx: RequestContext<R>): Promise<void> {
+    for (const handler of this.tf.error_observers) {
+      await (handler as ErrorObserver<R>)(err, ctx);
     }
-
-    for (const [handler, blocking] of this.tf.error_handlers) {
-      let releaser: Releaser | undefined = undefined;
-      let patch: RequestPatch | null = null;
-
-      if (blocking) {
-        releaser = this.tf.semaphore.block(err.url.toString());
-        [patch, releaser] = await handler(err, releaser);
-      } else {
-        [patch] = await handler(err);
-      }
-
-      releaser?.();
-      if (!patch) continue;
-
-      return patch;
-    }
-
-    return { retry: false };
   }
 
-  private apply_patch(patch: RequestPatch): boolean {
+  private async resolve_retry(err: RequestError, ctx: RequestContext<R>): Promise<RetryDecision> {
+    for (const [handler, options] of this.tf.retry_handlers) {
+      let releaser: Releaser | undefined = undefined;
+
+      try {
+        if (options.blocking) {
+          releaser = this.tf.semaphore.block(ctx.url.toString());
+        }
+
+        const decision = await (handler as RetryHandler<R>)(err, ctx);
+        if (decision.action != 'skip') {
+          return decision;
+        }
+      } finally {
+        releaser?.();
+      }
+    }
+
+    return { action: 'fail' };
+  }
+
+  private apply_patch(patch: RetryPatch): void {
     if (patch.base_url) {
       this.url = patch.base_url;
     }
@@ -346,8 +378,6 @@ export class Fetcher<R extends Endpoint> {
     if (patch.headers) {
       this.headers(patch.headers);
     }
-
-    return patch.retry;
   }
 
   private async fetch_response(url: URL): Promise<HttpResult<R>> {
@@ -367,14 +397,17 @@ export class Fetcher<R extends Endpoint> {
     }
   }
 
-  private async exec_request(url: URL, previous_lock?: Releaser): Promise<HttpResult<R>> {
+  private async exec_request(url: URL, previous_lock?: Releaser, attempt = 1): Promise<HttpResult<R>> {
     const release = previous_lock || (await this.tf.semaphore.acquire(url.toString()));
     let should_release = true;
 
     try {
       const result = await this.fetch_response(url);
-
-      let patch: RequestPatch;
+      const ctx: RequestContext<R> = {
+        url,
+        req: this,
+        attempt,
+      };
 
       if (result.ok) {
         const http_result = result.http;
@@ -382,22 +415,34 @@ export class Fetcher<R extends Endpoint> {
           return result;
         }
 
-        patch = await this.handle_error({ type: 'http', url, err: http_result });
+        const err: RequestError = { type: 'http', url, err: http_result };
+        await this.notify_error(err, ctx);
 
-        const retry = this.apply_patch(patch);
-
-        if (retry) {
+        const decision = await this.resolve_retry(err, ctx);
+        if (decision.action == 'retry') {
+          if (decision.patch) {
+            this.apply_patch(decision.patch);
+          }
+          if ((decision.delay_ms || 0) > 0) {
+            await sleep(decision.delay_ms || 0);
+          }
           should_release = false;
-          return this.exec_with_lock(release);
+          return this.exec_with_lock(release, attempt + 1);
         }
       } else {
-        patch = await this.handle_error({ type: 'fetch', url, err: result.error });
+        const err: RequestError = { type: 'fetch', url, err: result.error };
+        await this.notify_error(err, ctx);
 
-        const retry = this.apply_patch(patch);
-
-        if (retry) {
+        const decision = await this.resolve_retry(err, ctx);
+        if (decision.action == 'retry') {
+          if (decision.patch) {
+            this.apply_patch(decision.patch);
+          }
+          if ((decision.delay_ms || 0) > 0) {
+            await sleep(decision.delay_ms || 0);
+          }
           should_release = false;
-          return this.exec_with_lock(release);
+          return this.exec_with_lock(release, attempt + 1);
         }
       }
 
@@ -422,7 +467,7 @@ export class Fetcher<R extends Endpoint> {
     return dispatch(0);
   }
 
-  private async exec_with_lock(previous_lock?: Releaser): Promise<HttpResult<R>> {
+  private async exec_with_lock(previous_lock?: Releaser, attempt = 1): Promise<HttpResult<R>> {
     const do_log = this.log_exec;
     this.log_exec = false;
 
@@ -436,7 +481,7 @@ export class Fetcher<R extends Endpoint> {
     }
 
     this.log_exec = do_log;
-    return this.run_middlewares(url, () => this.exec_request(url, previous_lock));
+    return this.run_middlewares(url, () => this.exec_request(url, previous_lock, attempt));
   }
 
   /**
@@ -526,4 +571,8 @@ function normalize_fetch_error(error: unknown): FetchError {
     message: 'request failed',
     cause: error,
   };
+}
+
+async function sleep(delay_ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, delay_ms));
 }

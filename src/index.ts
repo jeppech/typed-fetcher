@@ -7,13 +7,17 @@ export { define_endpoints, endpoint } from './types.js';
 
 export { Fetcher, TypedFetcher } from './fetcher.js';
 export type {
+  ErrorObserver,
   HttpJsonError,
   HttpJsonResult,
-  ErrorHandler,
   MiddlewareHandler,
   NextHandler,
-  RequestPatch,
+  RequestContext,
   RequestError,
+  RetryDecision,
+  RetryHandler,
+  RetryOptions,
+  RetryPatch,
   TypedFetcherOptions,
   Unsubscriber,
 } from './fetcher.js';
