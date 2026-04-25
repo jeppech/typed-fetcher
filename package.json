@@ -1,6 +1,6 @@
 {
   "name": "@jeppech/typed-fetcher",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "description": "A fetch class, for typing HTTP endpoints",
   "author": "Jeppe Christiansen",
   "license": "ISC",
@@ -47,7 +47,6 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "@jeppech/results-ts": "^1.3.1",
     "@jeppech/semaphore-ts": "^1.0.0"
   }
 }
