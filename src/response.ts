@@ -1,121 +1,88 @@
-import { Err, Ok, type Result } from '@jeppech/results-ts';
-
+import type { FetchResult } from './result.js';
+import { err_result, ok_result } from './result.js';
 import type { Endpoint, Jsonable } from './types.js';
 
-// Extract the `ok` and `err` types from an endpoint response
-export type HttpResult<R extends Endpoint, E> = Result<HttpResponse<R['response']['ok'], R['response']['err']>, E>;
+export type HttpResult<R extends Endpoint> = FetchResult<HttpResponse<R['response']['ok'], R['response']['err']>>;
 
-enum ResponseType {
-  Ok,
-  Err,
-}
+export type HttpResponseBase = {
+  response: Response;
+  status: number;
+  text: () => Promise<FetchResult<string, ParseError>>;
+};
+
+export type HttpResponseOk<T> = HttpResponseBase & {
+  ok: true;
+  json: () => Promise<FetchResult<T, ParseError>>;
+};
+
+export type HttpResponseErr<E> = HttpResponseBase & {
+  ok: false;
+  json: () => Promise<FetchResult<E, ParseError>>;
+};
+
+export type HttpResponse<T, E> = HttpResponseOk<T> | HttpResponseErr<E>;
 
 export function http_response<R extends Endpoint>(
   response: Response,
 ): HttpResponse<R['response']['ok'], R['response']['err']> {
+  const base = {
+    response,
+    status: response.status,
+    text: async () => parse_text(response),
+  };
+
   if (response.ok) {
-    return new HttpResponseOk<R['response']['ok']>(response);
-  } else {
-    return new HttpResponseErr<R['response']['err']>(response);
+    return {
+      ...base,
+      ok: true,
+      json: async () => parse_json<R['response']['ok']>(response),
+    };
+  }
+
+  return {
+    ...base,
+    ok: false,
+    json: async () => parse_json<R['response']['err']>(response),
+  };
+}
+
+async function parse_json<T>(response: Response): Promise<FetchResult<T, ParseError>> {
+  try {
+    const json: T = await response.json();
+    return ok_result(json);
+  } catch (error) {
+    console.error('failed parsing json', error);
+    return err_result(new ParseError('JSON', 'failed parsing json', { context: response.url, cause: error }));
   }
 }
 
-export type HttpResponse<T, E> = HttpResponseOk<T> | HttpResponseErr<E>;
-
-abstract class BaseHttpResponse<T, E> {
-  abstract readonly type: ResponseType;
-
-  constructor(public readonly response: Response) {}
-
-  /**
-   * Response is OK if the HTTP status code is 2xx
-   */
-  ok(): this is HttpResponseOk<T> {
-    return this.type === ResponseType.Ok;
-  }
-
-  /**
-   * Response is Err if the HTTP status code is 4xx or 5xx
-   */
-  err(): this is HttpResponseErr<E> {
-    return this.type === ResponseType.Err;
-  }
-
-  /**
-   * Returns the HTTP status code
-   */
-  get status(): number {
-    return this.response.status;
-  }
-
-  abstract json(): Promise<Result<T, ParseError> | Result<E, ParseError>>;
-  abstract text(): Promise<Result<string, ParseError>>;
-}
-
-export class HttpResponseOk<T> extends BaseHttpResponse<T, never> {
-  readonly type = ResponseType.Ok;
-
-  async json(): Promise<Result<T, ParseError>> {
-    try {
-      const json: T = await this.response.json();
-      return Ok(json);
-    } catch (error) {
-      console.error('failed parsing json', error);
-      return Err(new ParseError('JSON', 'failed parsing json', { context: this.response.url, cause: error }));
-    }
-  }
-
-  async text(): Promise<Result<string, ParseError>> {
-    try {
-      const text: string = await this.response.text();
-      return Ok(text);
-    } catch (error) {
-      console.error('failed parsing text', error);
-      return Err(new ParseError('TEXT', 'failed parsing text', { context: this.response.url, cause: error }));
-    }
-  }
-}
-
-export class HttpResponseErr<E> extends BaseHttpResponse<never, E> {
-  readonly type = ResponseType.Err;
-
-  async json(): Promise<Result<E, ParseError>> {
-    try {
-      const json: E = await this.response.json();
-      return Ok(json);
-    } catch (error) {
-      console.error('failed parsing json', error);
-      return Err(new ParseError('JSON', 'failed parsing json', { context: this.response.url, cause: error }));
-    }
-  }
-
-  async text(): Promise<Result<string, ParseError>> {
-    try {
-      const text: string = await this.response.text();
-      return Ok(text);
-    } catch (error) {
-      console.error('failed parsing text', error);
-      return Err(new ParseError('TEXT', 'failed parsing text', { context: this.response.url, cause: error }));
-    }
+async function parse_text(response: Response): Promise<FetchResult<string, ParseError>> {
+  try {
+    const text: string = await response.text();
+    return ok_result(text);
+  } catch (error) {
+    console.error('failed parsing text', error);
+    return err_result(new ParseError('TEXT', 'failed parsing text', { context: response.url, cause: error }));
   }
 }
 
 export class BaseError<T extends string> extends Error {
-  name: T;
-  message: string;
+  override name: T;
+  override message: string;
 
   readonly context?: Jsonable;
 
   constructor(name: T, message: string, options: { cause?: unknown; context?: Jsonable } = {}) {
-    super();
+    super(message, { cause: options.cause });
 
     this.name = name;
     this.message = message;
     this.context = options.context;
-    this.cause = options.cause;
   }
 }
 
 type ParseTypes = 'JSON' | 'TEXT';
+type SerializeTypes = 'JSON_STRINGIFY' | 'BASE64_ENCODE';
 
 export class ParseError extends BaseError<ParseTypes> {}
+export class SerializeError extends BaseError<SerializeTypes> {}

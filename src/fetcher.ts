@@ -1,20 +1,24 @@
-import { Err, Ok } from '@jeppech/results-ts';
-import { base64_encode, json_stringify } from '@jeppech/results-ts/utils';
 import { Semaphore, type Releaser } from '@jeppech/semaphore-ts';
 
 import type { HttpResponseErr, HttpResult } from './response.js';
-import { http_response } from './response.js';
+import { ParseError, SerializeError, http_response } from './response.js';
+import type { FetchError } from './result.js';
+import { err_result, ok_result } from './result.js';
 import type { Endpoint, EndpointSpec, ExtractResponse } from './types.js';
 
-type FetcherOpts = {
+type EndpointOk<R extends Endpoint> = R['response']['ok'];
+type EndpointErr<R extends Endpoint> = R['response']['err'];
+
+export type TypedFetcherOptions<TSpec extends EndpointSpec = EndpointSpec> = {
   url: string;
   path?: string;
   semaphore?: number;
+  endpoints?: TSpec;
 };
 
 export type RequestError =
   | { type: 'http'; url: URL; err: HttpResponseErr<unknown> }
-  | { type: 'fetch'; url: URL; err: Error };
+  | { type: 'fetch'; url: URL; err: FetchError };
 
 export type RequestPatch = {
   base_url?: string;
@@ -24,7 +28,21 @@ export type RequestPatch = {
   retry: boolean;
 };
 
-export type InterceptHandler = (url: URL, req: Fetcher<Endpoint>) => Promise<void> | void;
+export type HttpJsonError<R extends Endpoint> =
+  | { type: 'fetch'; err: FetchError }
+  | { type: 'http'; response: HttpResponseErr<EndpointErr<R>>; body: EndpointErr<R> | null }
+  | { type: 'parse'; response: Response; err: ParseError };
+
+export type HttpJsonResult<R extends Endpoint> =
+  | { ok: true; http: EndpointOk<R>; response: Response }
+  | { ok: false; error: HttpJsonError<R> };
+
+export type NextHandler<R extends Endpoint = Endpoint> = () => Promise<HttpResult<R>>;
+export type MiddlewareHandler<R extends Endpoint = Endpoint> = (options: {
+  url: URL;
+  req: Fetcher<R>;
+  next: NextHandler<R>;
+}) => Promise<HttpResult<R>>;
 export type ErrorHandler = (
   err: RequestError,
   release?: Releaser,
@@ -32,14 +50,18 @@ export type ErrorHandler = (
 
 export type Unsubscriber = () => void;
 
+type RequestInitExtended = RequestInit & {
+  fetch?: typeof fetch;
+};
+
 export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
   error_handlers: [ErrorHandler, boolean][] = [];
-  intercept_handlers: InterceptHandler[] = [];
+  middleware_handlers: MiddlewareHandler[] = [];
 
   public semaphore: Semaphore;
   private log_exec: boolean = false;
 
-  constructor(private options: FetcherOpts) {
+  constructor(private options: TypedFetcherOptions<TSpec>) {
     const url = new URL(options.url);
 
     this.semaphore = new Semaphore(options.semaphore || 0);
@@ -63,13 +85,13 @@ export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
     return new Fetcher(this.options.url, path as string, { method: method as string }, this);
   }
 
-  intercept(handler: InterceptHandler): Unsubscriber {
-    this.intercept_handlers.push(handler);
+  use(handler: MiddlewareHandler): Unsubscriber {
+    this.middleware_handlers.push(handler);
 
     return () => {
-      const idx = this.intercept_handlers.findIndex((h) => h == handler);
+      const idx = this.middleware_handlers.findIndex((h) => h == handler);
       if (idx !== -1) {
-        this.intercept_handlers.splice(idx, 1);
+        this.middleware_handlers.splice(idx, 1);
       }
     };
   }
@@ -93,10 +115,6 @@ export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
   }
 }
 
-type RequestInitExtended = RequestInit & {
-  fetch?: typeof fetch;
-};
-
 export class Fetcher<R extends Endpoint> {
   fetch: typeof fetch;
 
@@ -114,7 +132,6 @@ export class Fetcher<R extends Endpoint> {
     this.url_path = path;
     this.options = options;
 
-    // Use the fetch function passed in options, or default
     this.fetch = this.options.fetch || globalThis.fetch;
     this.tf = tf;
     this.log_exec = tf.log();
@@ -124,7 +141,7 @@ export class Fetcher<R extends Endpoint> {
    * Set header "Authorization: base64(<username>:<password>)"
    */
   basic(username: string, password: string): this {
-    const encoded = base64_encode(`${username}:${password}`).expect('failed encoding credentials');
+    const encoded = encode_base64(`${username}:${password}`);
 
     return this.headers({
       Authorization: `Basic ${encoded}`,
@@ -193,7 +210,7 @@ export class Fetcher<R extends Endpoint> {
     };
 
     if (data !== undefined) {
-      this.options.body = json_stringify(data).expect('failed to stringify json body');
+      this.options.body = stringify_json(data);
       headers['Content-Type'] = 'application/json';
     }
 
@@ -225,12 +242,67 @@ export class Fetcher<R extends Endpoint> {
     return this;
   }
 
-  async request(method?: string): Promise<HttpResult<R, Error>> {
+  async request(method?: string): Promise<HttpResult<R>> {
     if (method !== undefined) {
       this.options.method = method;
     }
 
     return this.exec();
+  }
+
+  async exec_json(): Promise<HttpJsonResult<R>> {
+    const result = await this.exec();
+
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: {
+          type: 'fetch',
+          err: result.error,
+        },
+      };
+    }
+
+    if (!result.http.ok) {
+      const body_result = await result.http.json();
+      if (!body_result.ok) {
+        return {
+          ok: false,
+          error: {
+            type: 'parse',
+            response: result.http.response,
+            err: body_result.error,
+          },
+        };
+      }
+
+      return {
+        ok: false,
+        error: {
+          type: 'http',
+          response: result.http,
+          body: body_result.http,
+        },
+      };
+    }
+
+    const body_result = await result.http.json();
+    if (!body_result.ok) {
+      return {
+        ok: false,
+        error: {
+          type: 'parse',
+          response: result.http.response,
+          err: body_result.error,
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      http: body_result.http,
+      response: result.http.response,
+    };
   }
 
   private async handle_error(err: RequestError): Promise<RequestPatch> {
@@ -278,13 +350,79 @@ export class Fetcher<R extends Endpoint> {
     return patch.retry;
   }
 
-  private async intercept(url: URL): Promise<void> {
-    for (const handler of this.tf.intercept_handlers) {
-      await handler(url, this);
+  private async fetch_response(url: URL): Promise<HttpResult<R>> {
+    try {
+      const response = await this.fetch(url, this.options);
+
+      if (this.log_exec) {
+        console.log('--- response');
+        for (const [key, value] of response.headers.entries()) {
+          console.log(`${key}: ${value}`);
+        }
+      }
+
+      return ok_result(http_response<R>(response));
+    } catch (error) {
+      return err_result(normalize_fetch_error(error));
     }
   }
 
-  private async exec_with_lock(previous_lock?: Releaser): Promise<HttpResult<R, Error>> {
+  private async exec_request(url: URL, previous_lock?: Releaser): Promise<HttpResult<R>> {
+    const release = previous_lock || (await this.tf.semaphore.acquire(url.toString()));
+    let should_release = true;
+
+    try {
+      const result = await this.fetch_response(url);
+
+      let patch: RequestPatch;
+
+      if (result.ok) {
+        const http_result = result.http;
+        if (http_result.ok) {
+          return result;
+        }
+
+        patch = await this.handle_error({ type: 'http', url, err: http_result });
+
+        const retry = this.apply_patch(patch);
+
+        if (retry) {
+          should_release = false;
+          return this.exec_with_lock(release);
+        }
+      } else {
+        patch = await this.handle_error({ type: 'fetch', url, err: result.error });
+
+        const retry = this.apply_patch(patch);
+
+        if (retry) {
+          should_release = false;
+          return this.exec_with_lock(release);
+        }
+      }
+
+      return result;
+    } finally {
+      if (should_release) {
+        release();
+      }
+    }
+  }
+
+  private async run_middlewares(url: URL, final_handler: NextHandler<R>): Promise<HttpResult<R>> {
+    const dispatch = async (index: number): Promise<HttpResult<R>> => {
+      const handler = this.tf.middleware_handlers[index] as unknown as MiddlewareHandler<R> | undefined;
+      if (!handler) {
+        return final_handler();
+      }
+
+      return handler({ url, req: this, next: () => dispatch(index + 1) });
+    };
+
+    return dispatch(0);
+  }
+
+  private async exec_with_lock(previous_lock?: Releaser): Promise<HttpResult<R>> {
     const do_log = this.log_exec;
     this.log_exec = false;
 
@@ -297,51 +435,8 @@ export class Fetcher<R extends Endpoint> {
       console.log('Body', JSON.stringify(this.options.body, null, 2));
     }
 
-    await this.intercept(url);
-
-    const release = previous_lock || (await this.tf.semaphore.acquire(url.toString()));
-
-    const result: HttpResult<R, Error> = await this.fetch(url, this.options)
-      .then(async (r) => {
-        if (do_log) {
-          console.log('--- response');
-          for (const [key, value] of r.headers.entries()) {
-            console.log(`${key}: ${value}`);
-          }
-        }
-        return Ok(http_response<R>(r));
-      })
-      .catch((e: Error | string) => {
-        return Err(typeof e == 'string' ? new Error(e) : e);
-      });
-
-    let patch: RequestPatch;
-
-    if (result.is_ok()) {
-      const http_result = result.unwrap();
-      if (http_result.ok()) {
-        release();
-        return result;
-      }
-
-      patch = await this.handle_error({ type: 'http', url, err: http_result });
-
-      const retry = this.apply_patch(patch);
-
-      if (retry) {
-        return this.exec_with_lock(release);
-      }
-    } else {
-      patch = await this.handle_error({ type: 'fetch', url, err: result.unwrap_err() });
-
-      const retry = this.apply_patch(patch);
-
-      if (retry) {
-        return this.exec_with_lock(release);
-      }
-    }
-    release();
-    return result;
+    this.log_exec = do_log;
+    return this.run_middlewares(url, () => this.exec_request(url, previous_lock));
   }
 
   /**
@@ -350,23 +445,13 @@ export class Fetcher<R extends Endpoint> {
    *
    * This will not trigger any error handlers.
    */
-  async force_exec(): Promise<HttpResult<R, Error>> {
+  async force_exec(): Promise<HttpResult<R>> {
     const url = this.build_url();
 
-    await this.intercept(url);
-
-    const result: HttpResult<R, Error> = await this.fetch(url, this.options)
-      .then((r) => {
-        return Ok(http_response<R>(r));
-      })
-      .catch((e: Error | string) => {
-        return Err(typeof e == 'string' ? new Error(e) : e);
-      });
-
-    return result;
+    return this.run_middlewares(url, () => this.fetch_response(url));
   }
 
-  async exec(): Promise<HttpResult<R, Error>> {
+  async exec(): Promise<HttpResult<R>> {
     return this.exec_with_lock();
   }
 
@@ -389,4 +474,56 @@ export class Fetcher<R extends Endpoint> {
 
     return url;
   }
+}
+
+function encode_base64(value: string): string {
+  try {
+    return Buffer.from(value, 'utf8').toString('base64');
+  } catch (error) {
+    throw new SerializeError('BASE64_ENCODE', 'failed encoding credentials', { cause: error, context: value });
+  }
+}
+
+function stringify_json(value: unknown): string {
+  try {
+    const json = JSON.stringify(value);
+    if (json == undefined) {
+      throw new TypeError('json body resolved to undefined');
+    }
+    return json;
+  } catch (error) {
+    throw new SerializeError('JSON_STRINGIFY', 'failed to stringify json body', { cause: error });
+  }
+}
+
+function normalize_fetch_error(error: unknown): FetchError {
+  if (error instanceof DOMException && error.name == 'AbortError') {
+    return {
+      type: 'aborted',
+      message: 'request was aborted',
+      cause: error,
+    };
+  }
+
+  if (error instanceof TypeError) {
+    return {
+      type: 'network',
+      message: error.message,
+      cause: error,
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      type: 'unknown',
+      message: error.message,
+      cause: error,
+    };
+  }
+
+  return {
+    type: 'unknown',
+    message: 'request failed',
+    cause: error,
+  };
 }
