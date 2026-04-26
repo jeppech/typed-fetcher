@@ -1,13 +1,18 @@
 export type EndpointMethods = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options';
 
 export type EndpointResponse<TOkData = unknown, TErrData = unknown> = {
+  /** Response body returned for a successful HTTP response. */
   ok: TOkData;
+  /** Response body returned for a non-successful HTTP response. */
   err: TErrData;
 };
 
 export type EndpointRequest<TRequestBody = unknown, TUrlParams = unknown, TPathParams = unknown> = {
+  /** Request body type. */
   body: TRequestBody;
+  /** Query string parameter type. */
   url: TUrlParams;
+  /** Path parameter type. */
   path: TPathParams;
 };
 
@@ -15,7 +20,9 @@ export type Endpoint<
   TResponse extends EndpointResponse = EndpointResponse,
   TRequest extends EndpointRequest = EndpointRequest,
 > = {
+  /** Response shapes for the endpoint. */
   response: TResponse;
+  /** Optional request shape for the endpoint. */
   request?: TRequest;
 };
 

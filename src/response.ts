@@ -5,18 +5,25 @@ import type { Endpoint, Jsonable } from './types.js';
 export type HttpResult<R extends Endpoint> = FetchResult<HttpResponse<R['response']['ok'], R['response']['err']>>;
 
 export type HttpResponseBase = {
+  /** The underlying fetch response object. */
   response: Response;
+  /** HTTP status code from the response. */
   status: number;
+  /** Reads the response body as text. */
   text: () => Promise<FetchResult<string, ParseError>>;
 };
 
 export type HttpResponseOk<T> = HttpResponseBase & {
+  /** True when the response has a 2xx status. */
   ok: true;
+  /** Parses the response body as the endpoint's success payload. */
   json: () => Promise<FetchResult<T, ParseError>>;
 };
 
 export type HttpResponseErr<E> = HttpResponseBase & {
+  /** False when the response has a non-2xx status. */
   ok: false;
+  /** Parses the response body as the endpoint's error payload. */
   json: () => Promise<FetchResult<E, ParseError>>;
 };
 
@@ -70,6 +77,7 @@ export class BaseError<T extends string> extends Error {
   override name: T;
   override message: string;
 
+  /** Additional structured context for the error. */
   readonly context?: Jsonable;
 
   constructor(name: T, message: string, options: { cause?: unknown; context?: Jsonable } = {}) {

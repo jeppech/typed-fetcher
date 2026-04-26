@@ -10,46 +10,116 @@ type EndpointOk<R extends Endpoint> = R['response']['ok'];
 type EndpointErr<R extends Endpoint> = R['response']['err'];
 
 export type TypedFetcherOptions<TSpec extends EndpointSpec = EndpointSpec> = {
+  /** Base URL used when building request URLs. */
   url: string;
+  /** Optional shared path prefix. */
   path?: string;
+  /** Maximum number of concurrent requests for this fetcher. */
   semaphore?: number;
+  /** Endpoint definitions used for route type inference. */
   endpoints?: TSpec;
 };
 
 export type RequestError =
-  | { type: 'http'; url: URL; err: HttpResponseErr<unknown> }
-  | { type: 'fetch'; url: URL; err: FetchError };
+  | {
+      /** The request reached the server but returned a non-2xx response. */
+      type: 'http';
+      /** URL that was requested. */
+      url: URL;
+      /** HTTP error response wrapper. */
+      err: HttpResponseErr<unknown>;
+    }
+  | {
+      /** The request failed before receiving an HTTP response. */
+      type: 'fetch';
+      /** URL that was requested. */
+      url: URL;
+      /** Normalized fetch failure. */
+      err: FetchError;
+    };
 
 export type RetryPatch = {
+  /** Replaces the fetcher's base URL before retrying. */
   base_url?: string;
+  /** Replaces the route path before retrying. */
   route?: string;
+  /** Sets a bearer token before retrying. */
   bearer?: string;
+  /** Merges request headers before retrying. */
   headers?: Record<string, string>;
 };
 
 export type RequestContext<R extends Endpoint = Endpoint> = {
+  /** URL for the current request attempt. */
   url: URL;
+  /** Request builder for the current endpoint. */
   req: Fetcher<R>;
+  /** Current retry attempt number, starting at 1. */
   attempt: number;
 };
 
 export type RetryDecision =
-  | { action: 'skip' }
-  | { action: 'fail' }
-  | { action: 'retry'; patch?: RetryPatch; delay_ms?: number };
+  | {
+      /** Let the next retry handler decide. */
+      action: 'skip';
+    }
+  | {
+      /** Stop retrying and return the current error result. */
+      action: 'fail';
+    }
+  | {
+      /** Retry the request. */
+      action: 'retry';
+      /** Optional request changes to apply before retrying. */
+      patch?: RetryPatch;
+      /** Optional delay before the retry begins. */
+      delay_ms?: number;
+    };
 
 export type RetryOptions = {
+  /** Run the retry handler under the semaphore's blocking lock. */
   blocking?: boolean;
 };
 
 export type HttpJsonError<R extends Endpoint> =
-  | { type: 'fetch'; err: FetchError }
-  | { type: 'http'; response: HttpResponseErr<EndpointErr<R>>; body: EndpointErr<R> | null }
-  | { type: 'parse'; response: Response; err: ParseError };
+  | {
+      /** The request failed before an HTTP response was received. */
+      type: 'fetch';
+      /** Normalized fetch failure. */
+      err: FetchError;
+    }
+  | {
+      /** The server returned a non-2xx response. */
+      type: 'http';
+      /** HTTP error response wrapper. */
+      response: HttpResponseErr<EndpointErr<R>>;
+      /** Parsed error body, or null if parsing failed. */
+      body: EndpointErr<R> | null;
+    }
+  | {
+      /** The response body could not be parsed as JSON. */
+      type: 'parse';
+      /** Underlying fetch response object. */
+      response: Response;
+      /** Parse failure details. */
+      err: ParseError;
+    };
 
 export type HttpJsonResult<R extends Endpoint> =
-  | { ok: true; http: EndpointOk<R>; response: Response }
-  | { ok: false; error: HttpJsonError<R> };
+  | {
+      /** Indicates the request and JSON parsing succeeded. */
+      ok: true;
+      /** Parsed success body. */
+      http: EndpointOk<R>;
+      /** Underlying fetch response object. */
+      response: Response;
+    }
+  | {
+      /** Indicates the request failed at the fetch, HTTP, or parse layer. */
+      ok: false;
+      /** Flattened error result from `exec_json()`. */
+      error: HttpJsonError<R>;
+    };
 
 export type NextHandler<R extends Endpoint = Endpoint> = () => Promise<HttpResult<R>>;
 export type MiddlewareHandler<R extends Endpoint = Endpoint> = (options: {
@@ -347,7 +417,7 @@ export class Fetcher<R extends Endpoint> {
 
       try {
         if (options.blocking) {
-          releaser = this.tf.semaphore.block(ctx.url.toString());
+          releaser = this.tf.semaphore.block();
         }
 
         const decision = await (handler as RetryHandler<R>)(err, ctx);
@@ -398,7 +468,7 @@ export class Fetcher<R extends Endpoint> {
   }
 
   private async exec_request(url: URL, previous_lock?: Releaser, attempt = 1): Promise<HttpResult<R>> {
-    const release = previous_lock || (await this.tf.semaphore.acquire(url.toString()));
+    const release = previous_lock || (await this.tf.semaphore.acquire());
     let should_release = true;
 
     try {
