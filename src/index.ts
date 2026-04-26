@@ -1,4 +1,5 @@
 export type { HttpResponse, HttpResponseBase, HttpResponseErr, HttpResponseOk, HttpResult } from './response.js';
+export { is_host_unreachable_error } from './errors.js';
 export { BaseError, ParseError, SerializeError } from './response.js';
 export type { FetchError, FetchResult } from './result.js';
 export { err_result, ok_result } from './result.js';

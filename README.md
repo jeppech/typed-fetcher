@@ -240,6 +240,33 @@ fetcher.retry(handler, { blocking: true });
 When `blocking` is enabled, the retry handler runs under the fetcher semaphore's blocking lock.
 If another blocking retry handler is already active, later failed in-flight requests wait for it to finish and then run retry resolution again.
 
+To handle upstream DNS or connection-refused failures, use `is_host_unreachable_error(...)`:
+
+```ts
+import { is_host_unreachable_error } from '@jeppech/typed-fetcher';
+
+fetcher.retry(async (err) => {
+  if (!is_host_unreachable_error(err)) {
+    return { action: 'fail' };
+  }
+
+  const next_url = await resolver.resolve();
+
+  if (next_url.is_err()) {
+    return { action: 'fail' };
+  }
+
+  return {
+    action: 'retry',
+    patch: {
+      base_url: next_url.unwrap().toString(),
+    },
+  };
+});
+```
+
+This helper currently checks Node-style network errno codes exposed through `fetch` such as `ENOTFOUND`, `ECONNREFUSED`, `EHOSTUNREACH`, and `ENETUNREACH`.
+
 ## Rate Limiting
 
 Use `rate_limiter(...)` as middleware when the upstream API exposes rate-limit headers.
