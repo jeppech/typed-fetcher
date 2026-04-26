@@ -148,6 +148,9 @@ export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
   middleware_handlers: MiddlewareHandler[] = [];
 
   public semaphore: Semaphore;
+  private active_blocking_retry?: Promise<void>;
+  private release_active_blocking_retry?: () => void;
+  private blocking_retry_token = 0;
   private log_exec: boolean = false;
 
   constructor(private options: TypedFetcherOptions<TSpec>) {
@@ -212,6 +215,47 @@ export class TypedFetcher<TSpec extends EndpointSpec = EndpointSpec> {
       return this.log_exec;
     }
     return (this.log_exec = value);
+  }
+
+  /**
+   * Claims the single active blocking-retry slot for this fetcher.
+   * Returns undefined if another blocking retry handler is already running.
+   */
+  try_begin_blocking_retry(): Releaser | undefined {
+    if (this.active_blocking_retry) {
+      return undefined;
+    }
+
+    let released = false;
+    const token = ++this.blocking_retry_token;
+
+    this.active_blocking_retry = new Promise<void>((resolve) => {
+      this.release_active_blocking_retry = () => {
+        if (released) {
+          return;
+        }
+
+        released = true;
+        if (this.blocking_retry_token == token) {
+          this.active_blocking_retry = undefined;
+          this.release_active_blocking_retry = undefined;
+        }
+        resolve();
+      };
+    });
+
+    return () => {
+      this.release_active_blocking_retry?.();
+    };
+  }
+
+  async wait_for_blocking_retry(): Promise<boolean> {
+    if (!this.active_blocking_retry) {
+      return false;
+    }
+
+    await this.active_blocking_retry;
+    return true;
   }
 }
 
@@ -405,19 +449,31 @@ export class Fetcher<R extends Endpoint> {
     };
   }
 
+  /**
+   * Runs all error observers without affecting retry decisions.
+   */
   private async notify_error(err: RequestError, ctx: RequestContext<R>): Promise<void> {
     for (const handler of this.tf.error_observers) {
       await (handler as ErrorObserver<R>)(err, ctx);
     }
   }
 
+  /**
+   * Resolves retry handlers once. Blocking handlers both pause new requests and
+   * claim the single active blocking-retry slot while they run.
+   */
   private async resolve_retry(err: RequestError, ctx: RequestContext<R>): Promise<RetryDecision> {
     for (const [handler, options] of this.tf.retry_handlers) {
-      let releaser: Releaser | undefined = undefined;
+      let semaphore_releaser: Releaser | undefined = undefined;
+      let blocking_retry_releaser: Releaser | undefined = undefined;
 
       try {
         if (options.blocking) {
-          releaser = this.tf.semaphore.block();
+          semaphore_releaser = this.tf.semaphore.block();
+          blocking_retry_releaser = this.tf.try_begin_blocking_retry();
+          if (!blocking_retry_releaser) {
+            continue;
+          }
         }
 
         const decision = await (handler as RetryHandler<R>)(err, ctx);
@@ -425,13 +481,38 @@ export class Fetcher<R extends Endpoint> {
           return decision;
         }
       } finally {
-        releaser?.();
+        blocking_retry_releaser?.();
+        semaphore_releaser?.();
       }
     }
 
     return { action: 'fail' };
   }
 
+  /**
+   * Keeps retry resolution stable while a blocking retry is active elsewhere.
+   * If another request completes a blocking retry while we are deciding, wait
+   * for it and then evaluate retry handlers again with the current request state.
+   */
+  private async resolve_retry_stable(err: RequestError, ctx: RequestContext<R>): Promise<RetryDecision> {
+    while (true) {
+      if (await this.tf.wait_for_blocking_retry()) {
+        continue;
+      }
+
+      const decision = await this.resolve_retry(err, ctx);
+
+      if (await this.tf.wait_for_blocking_retry()) {
+        continue;
+      }
+
+      return decision;
+    }
+  }
+
+  /**
+   * Applies request changes returned by a retry handler before the next attempt.
+   */
   private apply_patch(patch: RetryPatch): void {
     if (patch.base_url) {
       this.url = patch.base_url;
@@ -450,6 +531,9 @@ export class Fetcher<R extends Endpoint> {
     }
   }
 
+  /**
+   * Executes the underlying fetch call and normalizes fetch-layer failures.
+   */
   private async fetch_response(url: URL): Promise<HttpResult<R>> {
     try {
       const response = await this.fetch(url, this.options);
@@ -467,6 +551,10 @@ export class Fetcher<R extends Endpoint> {
     }
   }
 
+  /**
+   * Runs one request attempt under the semaphore lock, then notifies observers
+   * and resolves retry behavior for fetch and HTTP failures.
+   */
   private async exec_request(url: URL, previous_lock?: Releaser, attempt = 1): Promise<HttpResult<R>> {
     const release = previous_lock || (await this.tf.semaphore.acquire());
     let should_release = true;
@@ -488,7 +576,7 @@ export class Fetcher<R extends Endpoint> {
         const err: RequestError = { type: 'http', url, err: http_result };
         await this.notify_error(err, ctx);
 
-        const decision = await this.resolve_retry(err, ctx);
+        const decision = await this.resolve_retry_stable(err, ctx);
         if (decision.action == 'retry') {
           if (decision.patch) {
             this.apply_patch(decision.patch);
@@ -503,7 +591,7 @@ export class Fetcher<R extends Endpoint> {
         const err: RequestError = { type: 'fetch', url, err: result.error };
         await this.notify_error(err, ctx);
 
-        const decision = await this.resolve_retry(err, ctx);
+        const decision = await this.resolve_retry_stable(err, ctx);
         if (decision.action == 'retry') {
           if (decision.patch) {
             this.apply_patch(decision.patch);
@@ -524,6 +612,9 @@ export class Fetcher<R extends Endpoint> {
     }
   }
 
+  /**
+   * Dispatches middleware in registration order and ends at the final handler.
+   */
   private async run_middlewares(url: URL, final_handler: NextHandler<R>): Promise<HttpResult<R>> {
     const dispatch = async (index: number): Promise<HttpResult<R>> => {
       const handler = this.tf.middleware_handlers[index] as unknown as MiddlewareHandler<R> | undefined;
@@ -537,6 +628,10 @@ export class Fetcher<R extends Endpoint> {
     return dispatch(0);
   }
 
+  /**
+   * Builds the current request URL, logs if enabled, and executes the request
+   * while preserving the current semaphore lock across retries.
+   */
   private async exec_with_lock(previous_lock?: Releaser, attempt = 1): Promise<HttpResult<R>> {
     const do_log = this.log_exec;
     this.log_exec = false;
@@ -570,6 +665,9 @@ export class Fetcher<R extends Endpoint> {
     return this.exec_with_lock();
   }
 
+  /**
+   * Expands path parameters and query parameters into the final request URL.
+   */
   private build_url(): URL {
     let path = this.url_path;
 
@@ -599,6 +697,9 @@ function encode_base64(value: string): string {
   }
 }
 
+/**
+ * Serializes JSON bodies and converts serialization failures to library errors.
+ */
 function stringify_json(value: unknown): string {
   try {
     const json = JSON.stringify(value);
@@ -611,6 +712,9 @@ function stringify_json(value: unknown): string {
   }
 }
 
+/**
+ * Maps raw fetch throws into the public `FetchError` union.
+ */
 function normalize_fetch_error(error: unknown): FetchError {
   if (error instanceof DOMException && error.name == 'AbortError') {
     return {
@@ -643,6 +747,9 @@ function normalize_fetch_error(error: unknown): FetchError {
   };
 }
 
+/**
+ * Shared delay helper for retry backoff.
+ */
 async function sleep(delay_ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, delay_ms));
 }

@@ -238,6 +238,7 @@ fetcher.retry(handler, { blocking: true });
 ```
 
 When `blocking` is enabled, the retry handler runs under the fetcher semaphore's blocking lock.
+If another blocking retry handler is already active, later failed in-flight requests wait for it to finish and then run retry resolution again.
 
 ## Rate Limiting
 
