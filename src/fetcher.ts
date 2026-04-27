@@ -691,10 +691,17 @@ export class Fetcher<R extends Endpoint> {
 
 function encode_base64(value: string): string {
   try {
-    return Buffer.from(value, 'utf8').toString('base64');
+    if (typeof window !== 'undefined' && typeof btoa !== 'undefined') {
+      return btoa(value);
+    }
+
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(value, 'utf8').toString('base64');
+    }
   } catch (error) {
     throw new SerializeError('BASE64_ENCODE', 'failed encoding credentials', { cause: error, context: value });
   }
+  throw new SerializeError('BASE64_ENCODE', 'environment does not support base64 encoding', { context: value });
 }
 
 /**
